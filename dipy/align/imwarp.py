@@ -1188,6 +1188,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         if len(level_iters) == 0:
             raise ValueError("The iterations list cannot be empty")
 
+        if num_threads is not None:
+            if not isinstance(num_threads, int):
+                raise TypeError("num_threads must be an int or None")
+            if num_threads < 1:
+                raise ValueError("num_threads must be a positive integer or None")
+
         self.set_level_iters(level_iters)
         self.step_length = step_length
         self.ss_sigma_factor = ss_sigma_factor
