@@ -30,6 +30,42 @@ from dipy.sims.voxel import all_tensor_evecs
 from dipy.utils.logging import logger
 from dipy.utils.multiproc import determine_num_processes
 
+# Reference ODI sampling grid. The library samples orientation-dispersion
+# values from ``linspace(*odi_range, num_odi_values)``; these constants define
+# the default grid and its density, which ``resolve_num_odi_values`` uses to
+# autoscale the number of grid points to any custom ``odi_range``.
+DEFAULT_ODI_RANGE = (0.01, 0.3)
+DEFAULT_NUM_ODI_VALUES = 10
+
+
+def resolve_num_odi_values(odi_range, num_odi_values=None):
+    """Resolve the number of ODI grid points, autoscaling when unset.
+
+    Parameters
+    ----------
+    odi_range : tuple
+        ``(min, max)`` orientation-dispersion-index range.
+    num_odi_values : int or None, optional
+        Explicit number of grid points. When ``None``, the grid is autoscaled
+        so its spacing matches the default grid
+        (``DEFAULT_NUM_ODI_VALUES`` points across ``DEFAULT_ODI_RANGE``),
+        keeping sampling density constant as ``odi_range`` widens or narrows.
+
+    Returns
+    -------
+    n : int
+        Number of ODI grid points (always >= 2).
+    """
+    if num_odi_values is not None:
+        n = int(num_odi_values)
+        if n < 2:
+            raise ValueError(f"num_odi_values must be >= 2; got {n}.")
+        return n
+    lo, hi = float(odi_range[0]), float(odi_range[1])
+    default_lo, default_hi = DEFAULT_ODI_RANGE
+    spacing = (default_hi - default_lo) / (DEFAULT_NUM_ODI_VALUES - 1)
+    return max(2, int(round((hi - lo) / spacing)) + 1)
+
 
 def dispersion_lut(target_sphere, odi_list):
     """Generate spherical functions for all directions and ODI values.
@@ -381,8 +417,8 @@ def generate_force_simulations(
     batch_size=1000,
     wm_threshold=0.5,
     tortuosity=False,
-    odi_range=(0.01, 0.3),
-    num_odi_values=10,
+    odi_range=DEFAULT_ODI_RANGE,
+    num_odi_values=None,
     diffusivity_config=None,
     dtype=np.float32,
     compute_dti=True,
@@ -417,8 +453,10 @@ def generate_force_simulations(
         Use tortuosity constraint for perpendicular diffusivity.
     odi_range : tuple, optional
         (min, max) orientation dispersion index range.
-    num_odi_values : int, optional
-        Number of ODI values to sample.
+    num_odi_values : int or None, optional
+        Number of ODI values in the sampling grid. When ``None`` (default),
+        the grid is autoscaled from ``odi_range`` to keep the sampling density
+        constant (see :func:`resolve_num_odi_values`).
     diffusivity_config : dict, optional
         Custom diffusivity ranges.
     dtype : dtype, optional
@@ -474,9 +512,15 @@ def generate_force_simulations(
         [all_tensor_evecs(tuple(point)) for point in target_sphere],
         dtype=np.float64,
     )
+    num_odi_values = resolve_num_odi_values(odi_range, num_odi_values)
     odi_list = np.linspace(odi_range[0], odi_range[1], num_odi_values).astype(
         np.float64
     )
+    if verbose:
+        logger.info(
+            f"ODI sampling grid: {num_odi_values} values over "
+            f"[{odi_range[0]:.3g}, {odi_range[1]:.3g}]"
+        )
     dispersion_sf = dispersion_lut(target_sphere, odi_list)
 
     label_dtype = np.uint8

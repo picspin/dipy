@@ -4,8 +4,11 @@ import numpy as np
 import pytest
 
 from dipy.sims.force import (
+    DEFAULT_NUM_ODI_VALUES,
+    DEFAULT_ODI_RANGE,
     dispersion_lut,
     get_default_diffusivity_config,
+    resolve_num_odi_values,
     smallest_shell_bval,
     validate_diffusivity_config,
 )
@@ -242,3 +245,47 @@ def test_generate_force_simulations_no_dti_no_dki():
             assert np.all(sims[key] == 0), f"'{key}' should be zero when DTI disabled"
         else:
             assert key not in sims, f"DKI key '{key}' should be absent"
+
+
+def test_resolve_num_odi_values_autoscale():
+    """None autoscales the ODI grid to keep sampling density constant."""
+    # Default range resolves to the historical fixed grid (backward compatible).
+    assert resolve_num_odi_values(DEFAULT_ODI_RANGE, None) == DEFAULT_NUM_ODI_VALUES
+
+    # Doubling the span roughly doubles the number of grid points.
+    assert resolve_num_odi_values((0.01, 0.6), None) == 19
+
+    # Narrower span -> fewer points; wider -> more.
+    n_narrow = resolve_num_odi_values((0.05, 0.15), None)
+    n_wide = resolve_num_odi_values((0.01, 0.9), None)
+    assert n_narrow < DEFAULT_NUM_ODI_VALUES < n_wide
+
+    # A degenerate (zero-width) range still yields a valid grid (>= 2).
+    assert resolve_num_odi_values((0.2, 0.2), None) == 2
+
+
+def test_resolve_num_odi_values_explicit_and_invalid():
+    """An explicit count is passed through; counts < 2 are rejected."""
+    # Explicit value is honored regardless of the range.
+    assert resolve_num_odi_values((0.01, 0.9), 7) == 7
+    assert resolve_num_odi_values(DEFAULT_ODI_RANGE, 3) == 3
+
+    for bad in (1, 0, -5):
+        with pytest.raises(ValueError, match="must be >= 2"):
+            resolve_num_odi_values(DEFAULT_ODI_RANGE, bad)
+
+
+def test_generate_force_simulations_honors_odi_grid():
+    """A resolve error for num_odi_values < 2 propagates through generation."""
+    from dipy.sims.force import generate_force_simulations
+
+    gtab = _make_gtab([1000])
+    with pytest.raises(ValueError, match="must be >= 2"):
+        generate_force_simulations(
+            gtab,
+            num_simulations=10,
+            batch_size=10,
+            num_cpus=1,
+            num_odi_values=1,
+            verbose=False,
+        )

@@ -599,3 +599,117 @@ def test_reconst_force_ray_fallback(monkeypatch, tmp_path):
 
     out_path = flow.last_generated_outputs["out_fa"]
     assert os.path.exists(out_path)
+
+
+def _patch_generate_capture(monkeypatch, fake_sims):
+    """Patch generate to record its kwargs and inject fake_sims."""
+    captured = {}
+
+    def _fake_generate(self, **kwargs):
+        captured.update(kwargs)
+        self.simulations = fake_sims
+        self._prepare_library()
+        return self
+
+    monkeypatch.setattr("dipy.reconst.force.FORCEModel.generate", _fake_generate)
+    return captured
+
+
+def test_reconst_force_prior_range_options(monkeypatch, tmp_path):
+    """CLI prior-range options are assembled and threaded into generate()."""
+    data_path, bval_path, bvec_path = get_fnames(name="small_64D")
+    volume, affine = load_nifti(data_path)
+    mask = np.ones(volume.shape[:3], dtype=np.uint8)
+    mask_path = tmp_path / "mask.nii.gz"
+    save_nifti(mask_path, mask, affine)
+
+    bvals, _ = read_bvals_bvecs(bval_path, bvec_path)
+    captured = _patch_generate_capture(monkeypatch, _make_fake_simulations(len(bvals)))
+
+    flow = ReconstForceFlow()
+    flow.run(
+        str(data_path),
+        str(bval_path),
+        str(bvec_path),
+        str(mask_path),
+        n_neighbors=5,
+        engine="serial",
+        odi_range=[0.01, 0.6],
+        num_odi_values=8,
+        wm_d_par_range=[0.0021, 0.0029],
+        csf_d=0.0028,
+        tortuosity=True,
+        save_metrics=["fa"],
+        out_dir=str(tmp_path),
+    )
+
+    # ODI grid options are threaded through verbatim.
+    npt.assert_allclose(captured["odi_range"], (0.01, 0.6))
+    assert captured["num_odi_values"] == 8
+    assert captured["tortuosity"] is True
+
+    # diffusivity_config: overridden keys applied, unset keys keep defaults.
+    cfg = captured["diffusivity_config"]
+    npt.assert_allclose(cfg["wm_d_par_range"], (0.0021, 0.0029))
+    npt.assert_allclose(cfg["csf_d"], 0.0028)
+    npt.assert_allclose(cfg["wm_d_perp_range"], (0.3e-3, 1.5e-3))  # default kept
+    npt.assert_allclose(cfg["gm_d_iso_range"], (0.7e-3, 1.2e-3))  # default kept
+
+
+def test_reconst_force_defaults_leave_priors_unset(monkeypatch, tmp_path):
+    """With no range options, generate() receives defaults (config=None)."""
+    data_path, bval_path, bvec_path = get_fnames(name="small_64D")
+    volume, affine = load_nifti(data_path)
+    mask = np.ones(volume.shape[:3], dtype=np.uint8)
+    mask_path = tmp_path / "mask.nii.gz"
+    save_nifti(mask_path, mask, affine)
+
+    bvals, _ = read_bvals_bvecs(bval_path, bvec_path)
+    captured = _patch_generate_capture(monkeypatch, _make_fake_simulations(len(bvals)))
+
+    flow = ReconstForceFlow()
+    flow.run(
+        str(data_path),
+        str(bval_path),
+        str(bvec_path),
+        str(mask_path),
+        n_neighbors=5,
+        save_metrics=["fa"],
+        out_dir=str(tmp_path),
+    )
+
+    # No overrides -> no explicit config or odi_range forwarded.
+    assert captured["diffusivity_config"] is None
+    assert captured["num_odi_values"] is None
+    assert "odi_range" not in captured
+
+
+def test_reconst_force_invalid_range_options(monkeypatch, tmp_path):
+    """Malformed range options raise a clear ValueError before fitting."""
+    data_path, bval_path, bvec_path = get_fnames(name="small_64D")
+    volume, affine = load_nifti(data_path)
+    mask_path = tmp_path / "mask.nii.gz"
+    save_nifti(mask_path, np.ones(volume.shape[:3], dtype=np.uint8), affine)
+
+    _patch_generate(monkeypatch, _make_fake_simulations(len(volume)))
+    flow = ReconstForceFlow()
+
+    with pytest.raises(ValueError, match="exactly two values"):
+        flow.run(
+            str(data_path),
+            str(bval_path),
+            str(bvec_path),
+            str(mask_path),
+            odi_range=[0.1],  # only one value
+            out_dir=str(tmp_path),
+        )
+
+    with pytest.raises(ValueError, match="must not exceed max"):
+        flow.run(
+            str(data_path),
+            str(bval_path),
+            str(bvec_path),
+            str(mask_path),
+            wm_d_par_range=[0.003, 0.002],  # min > max
+            out_dir=str(tmp_path),
+        )
