@@ -635,6 +635,42 @@ def test_warping_3d():
     )
 
 
+@set_random_number_generator(1234)
+def test_warping_threading(rng):
+    """Threaded warping matches one-thread warping."""
+    cases = (
+        (vfu.warp_2d, vfu.warp_2d_nn, (32, 29), 2),
+        (vfu.warp_3d, vfu.warp_3d_nn, (16, 15, 14), 3),
+    )
+
+    for warp, warp_nn, shape, dim in cases:
+        affine = np.eye(dim + 1)
+        out_shape = np.asarray(shape, dtype=np.int32)
+
+        for dtype in (np.float32, np.float64):
+            image = rng.random(shape).astype(dtype)
+            displacement = rng.normal(scale=0.25, size=shape + (dim,)).astype(dtype)
+
+            serial = warp(
+                image, displacement, affine, affine, affine, out_shape, num_threads=1
+            )
+            threaded = warp(
+                image, displacement, affine, affine, affine, out_shape, num_threads=2
+            )
+
+            assert_array_equal(threaded, serial)
+
+            labels = rng.integers(0, 8, size=shape, dtype=np.int32)
+            serial = warp_nn(
+                labels, displacement, affine, affine, affine, out_shape, num_threads=1
+            )
+            threaded = warp_nn(
+                labels, displacement, affine, affine, affine, out_shape, num_threads=2
+            )
+
+            assert_array_equal(threaded, serial)
+
+
 def test_affine_transforms_2d():
     r"""
     Tests 2D affine transform functions against scipy implementation
