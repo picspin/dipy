@@ -407,6 +407,19 @@ def test_optimizer_exceptions():
     assert_raises(
         ValueError, imwarp.SymmetricDiffeomorphicRegistration, metric, level_iters=[]
     )
+    assert_raises(
+        TypeError,
+        imwarp.SymmetricDiffeomorphicRegistration,
+        metric,
+        num_threads=1.5,
+    )
+    assert_raises(
+        ValueError,
+        imwarp.SymmetricDiffeomorphicRegistration,
+        metric,
+        num_threads=0,
+    )
+
     optimizer = imwarp.SymmetricDiffeomorphicRegistration(metric, level_iters=None)
     # Verify the default iterations list
     assert_array_equal(optimizer.level_iters, [100, 100, 25])

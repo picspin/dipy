@@ -71,6 +71,12 @@ cdef void _merge_composition_stats(double[:, :] partial_stats,
         if max_norm_sq < partial_stats[tid, 3]:
             max_norm_sq = partial_stats[tid, 3]
 
+    if count == 0:
+        stats[0] = 0
+        stats[1] = 0
+        stats[2] = 0
+        return
+
     mean_norm_sq = sum_norm_sq / count
     stats[0] = sqrt(max_norm_sq)
     stats[1] = sqrt(mean_norm_sq)
@@ -206,6 +212,7 @@ def compose_vector_fields_2d(floating[:, :, :] d1, floating[:, :, :] d2,
                              double[:, :] premult_disp,
                              double time_scaling,
                              floating[:, :, :] comp,
+                             *,
                              num_threads=None):
     r"""Computes the composition of two 2D displacement fields
 
@@ -428,6 +435,7 @@ def compose_vector_fields_3d(floating[:, :, :, :] d1, floating[:, :, :, :] d2,
                              double[:, :] premult_disp,
                              double time_scaling,
                              floating[:, :, :, :] comp,
+                             *,
                              num_threads=None):
     r"""Computes the composition of two 3D displacement fields
 
@@ -521,6 +529,7 @@ def invert_vector_field_fixed_point_2d(floating[:, :, :] d,
                                        double[:] spacing,
                                        int max_iter, double tolerance,
                                        floating[:, :, :] start=None,
+                                       *,
                                        num_threads=None):
     r"""Computes the inverse of a 2D displacement fields
 
@@ -637,6 +646,7 @@ def invert_vector_field_fixed_point_3d(floating[:, :, :, :] d,
                                        double[:] spacing,
                                        int max_iter, double tol,
                                        floating[:, :, :, :] start=None,
+                                       *,
                                        num_threads=None):
     r"""Computes the inverse of a 3D displacement fields
 
@@ -1515,6 +1525,7 @@ def warp_3d(floating[:, :, :] volume, floating[:, :, :, :] d1,
             double[:, :] affine_idx_out=None,
             double[:, :] affine_disp=None,
             int[:] out_shape=None,
+            *,
             num_threads=None):
     r"""Warps a 3D volume using trilinear interpolation
 
@@ -1769,6 +1780,7 @@ def warp_3d_nn(number[:, :, :] volume, floating[:, :, :, :] d1,
                double[:, :] affine_idx_out=None,
                double[:, :] affine_disp=None,
                int[:] out_shape=None,
+               *,
                num_threads=None):
     r"""Warps a 3D volume using using nearest-neighbor interpolation
 
@@ -2003,6 +2015,7 @@ def warp_2d(floating[:, :] image, floating[:, :, :] d1,
             double[:, :] affine_idx_out=None,
             double[:, :] affine_disp=None,
             int[:] out_shape=None,
+            *,
             num_threads=None):
     r"""Warps a 2D image using bilinear interpolation
 
@@ -2228,6 +2241,7 @@ def warp_2d_nn(number[:, :] image, floating[:, :, :] d1,
                double[:, :] affine_idx_out=None,
                double[:, :] affine_disp=None,
                int[:] out_shape=None,
+               *,
                num_threads=None):
     r"""Warps a 2D image using nearest neighbor interpolation
 

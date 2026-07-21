@@ -1199,9 +1199,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             to be called after each iteration (this optimizer will call this
             function passing self as parameter)
         num_threads : int or None, optional
-            Number of OpenMP threads used for displacement-field composition
-            and inversion. The effective number of threads is resolved when
-            each threaded operation is called.
+            Number of OpenMP threads used for displacement-field composition,
+            inversion, and image warping. If None, use DIPY's default OpenMP
+            thread count. This respects OMP_NUM_THREADS when set; otherwise,
+            all available threads are used. Negative values follow
+            ``dipy.utils.omp.determine_num_threads`` (``-1`` uses all
+            available cores).
         """
         super().__init__(metric=metric)
         if level_iters is None:
@@ -1213,8 +1216,8 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
         if num_threads is not None:
             if not isinstance(num_threads, int):
                 raise TypeError("num_threads must be an int or None")
-            if num_threads < 1:
-                raise ValueError("num_threads must be a positive integer or None")
+            if num_threads == 0:
+                raise ValueError("num_threads cannot be 0")
 
         self.set_level_iters(level_iters)
         self.step_length = step_length
