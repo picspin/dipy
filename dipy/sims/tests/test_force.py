@@ -289,3 +289,77 @@ def test_generate_force_simulations_honors_odi_grid():
             num_odi_values=1,
             verbose=False,
         )
+
+
+def _library_crossing_angles(sims, num_fibers):
+    """Antipodal-symmetric angles between the labelled fibers of *num_fibers* voxels."""
+    from dipy.data import default_sphere
+
+    vertices = default_sphere.vertices
+    angles = []
+    for labels in sims["labels"][sims["num_fibers"] == num_fibers]:
+        dirs = vertices[np.flatnonzero(labels == 1)]
+        for i in range(len(dirs)):
+            for j in range(i + 1, len(dirs)):
+                cos = np.clip(np.dot(dirs[i], dirs[j]), -1.0, 1.0)
+                angles.append(np.rad2deg(np.arccos(abs(cos))))
+    return np.asarray(angles)
+
+
+def test_generate_force_simulations_default_min_crossing_angles(monkeypatch):
+    """By default the library holds no crossing below 30 (two) or 60 (three) degrees."""
+    from dipy.sims.force import generate_force_simulations
+
+    monkeypatch.setattr(
+        "dipy.sims.force.init_worker", lambda *a, **k: np.random.seed(0)
+    )
+    gtab = _make_gtab([1000, 2000])
+    sims = generate_force_simulations(
+        gtab, num_simulations=300, batch_size=100, num_cpus=1, verbose=False
+    )
+
+    two = _library_crossing_angles(sims, 2)
+    three = _library_crossing_angles(sims, 3)
+    assert two.size and three.size
+    assert two.min() >= 30.0
+    assert three.min() >= 60.0
+
+
+def test_generate_force_simulations_relaxed_min_crossing_angles(monkeypatch):
+    """Lowering the limits lets shallow crossings into the library."""
+    from dipy.sims.force import generate_force_simulations
+
+    monkeypatch.setattr(
+        "dipy.sims.force.init_worker", lambda *a, **k: np.random.seed(0)
+    )
+    gtab = _make_gtab([1000, 2000])
+    sims = generate_force_simulations(
+        gtab,
+        num_simulations=300,
+        batch_size=100,
+        num_cpus=1,
+        two_fiber_min_angle=0.0,
+        three_fiber_min_angle=0.0,
+        verbose=False,
+    )
+
+    two = _library_crossing_angles(sims, 2)
+    three = _library_crossing_angles(sims, 3)
+    assert two.size and three.size
+    assert two.min() < 30.0
+    assert three.min() < 60.0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{"two_fiber_min_angle": 90.0}, {"three_fiber_min_angle": -1.0}],
+)
+def test_generate_force_simulations_invalid_min_crossing_angle(kwargs):
+    """Angles outside [0, 90) degrees are rejected."""
+    from dipy.sims.force import generate_force_simulations
+
+    gtab = _make_gtab([1000])
+    with pytest.raises(ValueError, match="must be in .0, 90. degrees"):
+        generate_force_simulations(
+            gtab, num_simulations=10, batch_size=10, num_cpus=1, verbose=False, **kwargs
+        )

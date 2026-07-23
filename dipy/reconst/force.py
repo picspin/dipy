@@ -13,6 +13,10 @@ from dipy.reconst._force_search import search_inner_product as _cython_search
 from dipy.reconst.base import ReconstFit, ReconstModel
 from dipy.reconst.multi_voxel import multi_voxel_fit
 from dipy.reconst.shm import sf_to_sh
+from dipy.sims._force_core import (
+    DEFAULT_THREE_FIBER_MIN_ANGLE,
+    DEFAULT_TWO_FIBER_MIN_ANGLE,
+)
 from dipy.sims.force import (
     DEFAULT_NUM_ODI_VALUES,
     DEFAULT_ODI_RANGE,
@@ -197,8 +201,29 @@ def _odi_grid_matches(entry, odi_range, num_odi_values):
     return int(entry_num) == int(num_odi_values)
 
 
+def _min_angles_match(entry, min_crossing_angles):
+    """Check whether a registry *entry*'s crossing angles match the request.
+
+    Entries written before this became part of the cache key are read as
+    using the defaults.
+    """
+    entry_angles = (
+        entry.get("two_fiber_min_angle", DEFAULT_TWO_FIBER_MIN_ANGLE),
+        entry.get("three_fiber_min_angle", DEFAULT_THREE_FIBER_MIN_ANGLE),
+    )
+    return all(
+        np.isclose(a, b) for a, b in zip(entry_angles, min_crossing_angles, strict=True)
+    )
+
+
 def _find_cached_simulation(
-    cache_dir, gtab, diffusivity_config, num_simulations, odi_range, num_odi_values
+    cache_dir,
+    gtab,
+    diffusivity_config,
+    num_simulations,
+    odi_range,
+    num_odi_values,
+    min_crossing_angles,
 ):
     """Search the registry for a simulation matching the given parameters.
 
@@ -216,6 +241,8 @@ def _find_cached_simulation(
         ``(min, max)`` orientation-dispersion-index range.
     num_odi_values : int
         Resolved number of ODI grid points.
+    min_crossing_angles : tuple
+        ``(two_fiber_min_angle, three_fiber_min_angle)`` in degrees.
 
     Returns
     -------
@@ -232,6 +259,8 @@ def _find_cached_simulation(
             continue
         if not _odi_grid_matches(entry, odi_range, num_odi_values):
             continue
+        if not _min_angles_match(entry, min_crossing_angles):
+            continue
         candidate = cache_dir / entry["filename"]
         if candidate.exists():
             return str(candidate)
@@ -246,6 +275,7 @@ def _register_cached_simulation(
     filename,
     odi_range,
     num_odi_values,
+    min_crossing_angles,
 ):
     """Add a new entry to the cache registry.
 
@@ -265,6 +295,8 @@ def _register_cached_simulation(
         ``(min, max)`` orientation-dispersion-index range.
     num_odi_values : int
         Resolved number of ODI grid points.
+    min_crossing_angles : tuple
+        ``(two_fiber_min_angle, three_fiber_min_angle)`` in degrees.
     """
 
     # Convert numpy types to plain Python for JSON serialisation
@@ -288,6 +320,8 @@ def _register_cached_simulation(
         "num_simulations": int(num_simulations),
         "odi_range": [float(odi_range[0]), float(odi_range[1])],
         "num_odi_values": int(num_odi_values),
+        "two_fiber_min_angle": float(min_crossing_angles[0]),
+        "three_fiber_min_angle": float(min_crossing_angles[1]),
         "filename": filename,
     }
 
@@ -758,6 +792,8 @@ class FORCEModel(ReconstModel):
         tortuosity=False,
         odi_range=DEFAULT_ODI_RANGE,
         num_odi_values=None,
+        two_fiber_min_angle=DEFAULT_TWO_FIBER_MIN_ANGLE,
+        three_fiber_min_angle=DEFAULT_THREE_FIBER_MIN_ANGLE,
         diffusivity_config=None,
         compute_dti=True,
         compute_dki=False,
@@ -769,8 +805,9 @@ class FORCEModel(ReconstModel):
         When ``output_path`` is ``None`` and ``use_cache`` is ``True``,
         simulations are cached in ``~/.dipy/force_simulations/`` (or
         ``$DIPY_HOME``). A registry file (``cache_registry.json``) keeps
-        track of the bvals, bvecs, diffusivity configuration and number of
-        simulations for each cached file. If a cached simulation that matches
+        track of the bvals, bvecs, diffusivity configuration, ODI grid,
+        minimum crossing angles and number of simulations for each cached
+        file. If a cached simulation that matches
         the current gradient table (within tolerance) and diffusivity
         configuration already exists, it is loaded from disk and generation
         is skipped.
@@ -797,6 +834,13 @@ class FORCEModel(ReconstModel):
             Number of points in the ODI sampling grid. When ``None`` (default),
             the grid is autoscaled from ``odi_range`` so its sampling density
             matches the default grid.
+        two_fiber_min_angle : float, optional
+            Minimum crossing angle for two-fiber simulations, in degrees. The
+            library never contains crossings below this angle, so the fit
+            cannot report them either. Use ``0`` to allow any crossing.
+        three_fiber_min_angle : float, optional
+            Minimum pairwise crossing angle for three-fiber simulations, in
+            degrees.
         diffusivity_config : dict, optional
             Custom diffusivity ranges.
         compute_dti : bool, optional
@@ -846,6 +890,7 @@ class FORCEModel(ReconstModel):
         # key and the generated library agree on it.
         resolved_odi_range = (float(odi_range[0]), float(odi_range[1]))
         resolved_num_odi = resolve_num_odi_values(resolved_odi_range, num_odi_values)
+        min_crossing_angles = (float(two_fiber_min_angle), float(three_fiber_min_angle))
 
         # --- Cache logic when no explicit output_path is given ----------
         if output_path is None and use_cache:
@@ -857,6 +902,7 @@ class FORCEModel(ReconstModel):
                 num_simulations,
                 resolved_odi_range,
                 resolved_num_odi,
+                min_crossing_angles,
             )
             if cached is not None:
                 if verbose:
@@ -874,6 +920,8 @@ class FORCEModel(ReconstModel):
             tortuosity=tortuosity,
             odi_range=resolved_odi_range,
             num_odi_values=resolved_num_odi,
+            two_fiber_min_angle=two_fiber_min_angle,
+            three_fiber_min_angle=three_fiber_min_angle,
             diffusivity_config=diffusivity_config,
             compute_dti=compute_dti,
             compute_dki=compute_dki,
@@ -906,6 +954,7 @@ class FORCEModel(ReconstModel):
                 filename,
                 resolved_odi_range,
                 resolved_num_odi,
+                min_crossing_angles,
             )
             if verbose:
                 print(f"[FORCE] Cached simulations to {cache_dir / filename}")

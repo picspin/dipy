@@ -26,6 +26,10 @@ import numpy as np
 
 from dipy.data import default_sphere
 from dipy.reconst.bingham import _single_bingham_to_sf as bingham_to_sf
+from dipy.sims._force_core import (
+    DEFAULT_THREE_FIBER_MIN_ANGLE,
+    DEFAULT_TWO_FIBER_MIN_ANGLE,
+)
 from dipy.sims.voxel import all_tensor_evecs
 from dipy.utils.logging import logger
 from dipy.utils.multiproc import determine_num_processes
@@ -185,6 +189,7 @@ def _generate_batch_worker(
     tort,
     memmap_info,
     diffusivity_cfg,
+    min_crossing_angles,
 ):
     """Worker function for parallel batch generation.
 
@@ -310,7 +315,17 @@ def _generate_batch_worker(
     for i in range(batch_size):
         idx = start_idx + i
         res = create_mixed_signal(
-            sphere, evecs, bingham, odi, bval, bvec, multi_tensor, wm_thresh, tort
+            sphere,
+            evecs,
+            bingham,
+            odi,
+            bval,
+            bvec,
+            multi_tensor,
+            wm_thresh,
+            tort,
+            min_crossing_angles[0],
+            min_crossing_angles[1],
         )
         (
             signals_mm[idx],
@@ -419,6 +434,8 @@ def generate_force_simulations(
     tortuosity=False,
     odi_range=DEFAULT_ODI_RANGE,
     num_odi_values=None,
+    two_fiber_min_angle=DEFAULT_TWO_FIBER_MIN_ANGLE,
+    three_fiber_min_angle=DEFAULT_THREE_FIBER_MIN_ANGLE,
     diffusivity_config=None,
     dtype=np.float32,
     compute_dti=True,
@@ -457,6 +474,12 @@ def generate_force_simulations(
         Number of ODI values in the sampling grid. When ``None`` (default),
         the grid is autoscaled from ``odi_range`` to keep the sampling density
         constant (see :func:`resolve_num_odi_values`).
+    two_fiber_min_angle : float, optional
+        Minimum crossing angle for two-fiber simulations, in degrees. Crossings
+        below this angle are never simulated. Use ``0`` to allow any crossing.
+    three_fiber_min_angle : float, optional
+        Minimum pairwise crossing angle for three-fiber simulations, in
+        degrees.
     diffusivity_config : dict, optional
         Custom diffusivity ranges.
     dtype : dtype, optional
@@ -497,6 +520,14 @@ def generate_force_simulations(
         }
 
     set_diffusivity_ranges(**diffusivity_config)
+
+    for name, angle in (
+        ("two_fiber_min_angle", two_fiber_min_angle),
+        ("three_fiber_min_angle", three_fiber_min_angle),
+    ):
+        if not 0 <= angle < 90:
+            raise ValueError(f"{name} must be in [0, 90) degrees, got {angle}")
+    min_crossing_angles = (float(two_fiber_min_angle), float(three_fiber_min_angle))
 
     # Setup sphere and ODI values
     sphere = default_sphere
@@ -663,6 +694,7 @@ def generate_force_simulations(
                 tortuosity,
                 memmap_info,
                 diffusivity_config,
+                min_crossing_angles,
             )
             pbar.update(batch_done)
     elif sys.platform == "win32":
@@ -686,6 +718,7 @@ def generate_force_simulations(
                         tortuosity,
                         memmap_info,
                         diffusivity_config,
+                        min_crossing_angles,
                     ): (start_idx, bs)
                     for start_idx, bs in batch_specs
                 }
@@ -713,6 +746,7 @@ def generate_force_simulations(
                     tortuosity,
                     memmap_info,
                     diffusivity_config,
+                    min_crossing_angles,
                 )
                 pbar.update(batch_done)
     else:
@@ -739,6 +773,7 @@ def generate_force_simulations(
                     tortuosity,
                     memmap_info,
                     diffusivity_config,
+                    min_crossing_angles,
                 ): (start_idx, bs)
                 for start_idx, bs in batch_specs
             }

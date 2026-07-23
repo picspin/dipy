@@ -389,3 +389,38 @@ def test_force_cache_keys_on_odi_grid(tmp_path, monkeypatch):
     gen(num_odi_values=5)
     assert ((0.01, 0.3), 5) in entries()
     assert len(entries()) == 3
+
+
+def test_cache_registry_separates_min_crossing_angles(tmp_path, monkeypatch):
+    """Libraries built with different crossing-angle limits get separate cache slots."""
+    from dipy.core.gradients import gradient_table
+
+    monkeypatch.setenv("DIPY_HOME", str(tmp_path))
+
+    dirs = np.array(
+        [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]],
+        dtype=float,
+    )
+    bvals = np.array([0.0] + [1000.0] * 6 + [2000.0] * 6)
+    bvecs = np.vstack(([[0.0, 0.0, 0.0]], dirs, dirs))
+    gtab = gradient_table(bvals, bvecs=bvecs)
+
+    strict = FORCEModel(gtab)
+    strict.generate(num_simulations=60, num_cpus=1, verbose=False)
+
+    relaxed = FORCEModel(gtab)
+    relaxed.generate(
+        num_simulations=60, num_cpus=1, two_fiber_min_angle=0.0, verbose=False
+    )
+
+    cache_dir = tmp_path / "force_simulations"
+    assert len(list(cache_dir.glob("force_sim_*.npz"))) == 2
+
+    # The relaxed request must not be served the strict library, and a repeat
+    # of the relaxed request must reuse the one just written.
+    again = FORCEModel(gtab)
+    again.generate(
+        num_simulations=60, num_cpus=1, two_fiber_min_angle=0.0, verbose=False
+    )
+    assert len(list(cache_dir.glob("force_sim_*.npz"))) == 2
+    npt.assert_array_equal(again.simulations["signals"], relaxed.simulations["signals"])
