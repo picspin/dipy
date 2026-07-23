@@ -342,6 +342,7 @@ class DiffeomorphicMap:
         image_world2grid=None,
         out_shape=None,
         out_grid2world=None,
+        num_threads=None,
     ):
         """Warps an image in the forward direction
 
@@ -366,6 +367,9 @@ class DiffeomorphicMap:
             the number of slices, rows, and columns of the desired warped image
         out_grid2world : the transformation bringing voxel coordinates of the
             warped image to physical space
+        num_threads : int or None, optional
+            Number of OpenMP threads used for image warping. If None, use
+            DIPY's default thread count.
 
         Returns
         -------
@@ -454,6 +458,7 @@ class DiffeomorphicMap:
             affine_idx_out=affine_idx_out,
             affine_disp=affine_disp,
             out_shape=out_shape,
+            num_threads=num_threads,
         )
         return warped
 
@@ -466,6 +471,7 @@ class DiffeomorphicMap:
         image_world2grid=None,
         out_shape=None,
         out_grid2world=None,
+        num_threads=None,
     ):
         """Warps an image in the backward direction
 
@@ -490,6 +496,9 @@ class DiffeomorphicMap:
             the number of slices, rows and columns of the desired warped image
         out_grid2world : the transformation bringing voxel coordinates of the
             warped image to physical space
+        num_threads : int or None, optional
+            Number of OpenMP threads used for image warping. If None, use
+            DIPY's default thread count.
 
         Returns
         -------
@@ -577,6 +586,7 @@ class DiffeomorphicMap:
             affine_idx_out=affine_idx_out,
             affine_disp=affine_disp,
             out_shape=out_shape,
+            num_threads=num_threads,
         )
 
         return warped
@@ -590,6 +600,7 @@ class DiffeomorphicMap:
         image_world2grid=None,
         out_shape=None,
         out_grid2world=None,
+        num_threads=None,
     ):
         """Warps an image in the forward direction
 
@@ -613,6 +624,9 @@ class DiffeomorphicMap:
             the number of slices, rows and columns of the desired warped image
         out_grid2world : the transformation bringing voxel coordinates of the
             warped image to physical space
+        num_threads : int or None, optional
+            Number of OpenMP threads used for image warping. If None, use
+            DIPY's default thread count.
 
         Returns
         -------
@@ -633,6 +647,7 @@ class DiffeomorphicMap:
                 image_world2grid=image_world2grid,
                 out_shape=out_shape,
                 out_grid2world=out_grid2world,
+                num_threads=num_threads,
             )
         else:
             warped = self._warp_forward(
@@ -641,6 +656,7 @@ class DiffeomorphicMap:
                 image_world2grid=image_world2grid,
                 out_shape=out_shape,
                 out_grid2world=out_grid2world,
+                num_threads=num_threads,
             )
         return np.asarray(warped)
 
@@ -653,6 +669,7 @@ class DiffeomorphicMap:
         image_world2grid=None,
         out_shape=None,
         out_grid2world=None,
+        num_threads=None,
     ):
         """Warps an image in the backward direction
 
@@ -676,6 +693,9 @@ class DiffeomorphicMap:
             the number of slices, rows, and columns of the desired warped image
         out_grid2world : the transformation bringing voxel coordinates of the
             warped image to physical space
+        num_threads : int or None, optional
+            Number of OpenMP threads used for image warping. If None, use
+            DIPY's default thread count.
 
         Returns
         -------
@@ -694,6 +714,7 @@ class DiffeomorphicMap:
                 image_world2grid=image_world2grid,
                 out_shape=out_shape,
                 out_grid2world=out_grid2world,
+                num_threads=num_threads,
             )
         else:
             warped = self._warp_backward(
@@ -702,6 +723,7 @@ class DiffeomorphicMap:
                 image_world2grid=image_world2grid,
                 out_shape=out_shape,
                 out_grid2world=out_grid2world,
+                num_threads=num_threads,
             )
         return np.asarray(warped)
 
@@ -1177,9 +1199,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             to be called after each iteration (this optimizer will call this
             function passing self as parameter)
         num_threads : int or None, optional
-            Number of OpenMP threads used for displacement-field composition
-            and inversion. The effective number of threads is resolved when
-            each threaded operation is called.
+            Number of OpenMP threads used for displacement-field composition,
+            inversion, and image warping. If None, use DIPY's default OpenMP
+            thread count. This respects OMP_NUM_THREADS when set; otherwise,
+            all available threads are used. Negative values follow
+            ``dipy.utils.omp.determine_num_threads`` (``-1`` uses all
+            available cores).
         """
         super().__init__(metric=metric)
         if level_iters is None:
@@ -1187,6 +1212,12 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
 
         if len(level_iters) == 0:
             raise ValueError("The iterations list cannot be empty")
+
+        if num_threads is not None:
+            if not isinstance(num_threads, int):
+                raise TypeError("num_threads must be an int or None")
+            if num_threads == 0:
+                raise ValueError("num_threads cannot be 0")
 
         self.set_level_iters(level_iters)
         self.step_length = step_length
@@ -1496,6 +1527,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             image_world2grid=None,
             out_shape=current_disp_shape,
             out_grid2world=current_disp_grid2world,
+            num_threads=self.num_threads,
         )
         wmoving = self.moving_to_ref.transform_inverse(
             current_moving,
@@ -1503,6 +1535,7 @@ class SymmetricDiffeomorphicRegistration(DiffeomorphicRegistration):
             image_world2grid=None,
             out_shape=current_disp_shape,
             out_grid2world=current_disp_grid2world,
+            num_threads=self.num_threads,
         )
         # Pass both images to the metric. Now both images are sampled on the
         # reference grid (equal to the static image's grid) and the direction

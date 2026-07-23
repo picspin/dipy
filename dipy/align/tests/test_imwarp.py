@@ -353,6 +353,50 @@ def test_diffeomorphic_map_simplification_3d():
     assert_array_almost_equal(warped, expected)
 
 
+@set_random_number_generator(1234)
+def test_diffeomorphic_map_warp_threading(rng):
+    """Threaded map warping matches one-thread map warping."""
+    cases = (
+        (2, (32, 29)),
+        (3, (16, 15, 14)),
+    )
+
+    for dim, shape in cases:
+        image = rng.random(shape).astype(np.float32)
+        forward = rng.normal(scale=0.25, size=shape + (dim,)).astype(np.float32)
+        backward = rng.normal(scale=0.25, size=shape + (dim,)).astype(np.float32)
+        grid2world = np.eye(dim + 1)
+
+        diff_map = DiffeomorphicMap(
+            dim=dim,
+            disp_shape=shape,
+            disp_grid2world=grid2world,
+            domain_shape=shape,
+            domain_grid2world=grid2world,
+            codomain_shape=shape,
+            codomain_grid2world=grid2world,
+        )
+        diff_map.forward = forward
+        diff_map.backward = backward
+
+        for interpolation in ("linear", "nearest"):
+            serial = diff_map.transform(
+                image, interpolation=interpolation, num_threads=1
+            )
+            threaded = diff_map.transform(
+                image, interpolation=interpolation, num_threads=2
+            )
+            assert_array_equal(threaded, serial)
+
+            serial = diff_map.transform_inverse(
+                image, interpolation=interpolation, num_threads=1
+            )
+            threaded = diff_map.transform_inverse(
+                image, interpolation=interpolation, num_threads=2
+            )
+            assert_array_equal(threaded, serial)
+
+
 def test_optimizer_exceptions():
     r"""Test exceptions from SyN"""
     # An arbitrary valid metric
@@ -363,6 +407,19 @@ def test_optimizer_exceptions():
     assert_raises(
         ValueError, imwarp.SymmetricDiffeomorphicRegistration, metric, level_iters=[]
     )
+    assert_raises(
+        TypeError,
+        imwarp.SymmetricDiffeomorphicRegistration,
+        metric,
+        num_threads=1.5,
+    )
+    assert_raises(
+        ValueError,
+        imwarp.SymmetricDiffeomorphicRegistration,
+        metric,
+        num_threads=0,
+    )
+
     optimizer = imwarp.SymmetricDiffeomorphicRegistration(metric, level_iters=None)
     # Verify the default iterations list
     assert_array_equal(optimizer.level_iters, [100, 100, 25])
