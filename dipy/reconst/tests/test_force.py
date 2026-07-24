@@ -1,6 +1,7 @@
 """Tests for FORCE reconstruction module."""
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import types
 
 import numpy as np
@@ -10,9 +11,12 @@ from numpy.testing import assert_almost_equal, assert_array_less
 from dipy.core.gradients import gradient_table
 from dipy.data import default_sphere
 from dipy.reconst.force import (
+    DEFAULT_NUM_ODI_VALUES,
+    DEFAULT_ODI_RANGE,
     FORCEModel,
     SignalIndex,
     _fwhm_kde_batch,
+    _odi_grid_matches,
     _weighted_percentile,
     compute_microstructure_uncertainty_ambiguity,
     compute_uncertainty_ambiguity,
@@ -20,6 +24,22 @@ from dipy.reconst.force import (
     normalize_signals,
     softmax_stable,
 )
+
+
+def _make_gtab(shells):
+    """Minimal GradientTable: two b0s + 6 directions per non-zero shell."""
+    from dipy.core.gradients import gradient_table
+
+    dirs = np.array(
+        [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]],
+        dtype=float,
+    )
+    bvals = [0, 0]
+    bvecs = [[0, 0, 0], [0, 0, 0]]
+    for b in shells:
+        bvals.extend([b] * 6)
+        bvecs.extend(dirs.tolist())
+    return gradient_table(np.array(bvals, dtype=float), bvecs=np.array(bvecs))
 
 
 def test_normalize_signals():
@@ -313,3 +333,94 @@ def test_micro_postprocessing_serial_inside_ray_worker(monkeypatch):
                 np.asarray(getattr(threaded, f"{metric}_{param}")),
                 np.asarray(getattr(serial, f"{metric}_{param}")),
             )
+
+
+def test_odi_grid_matches_legacy_and_exact():
+    """Cache matching on the ODI grid, incl. legacy (keyless) entries."""
+    # A legacy entry (written before the ODI grid was part of the key) is
+    # treated as the historical default grid.
+    legacy = {"num_simulations": 100}
+    assert _odi_grid_matches(legacy, DEFAULT_ODI_RANGE, DEFAULT_NUM_ODI_VALUES)
+    assert not _odi_grid_matches(legacy, (0.01, 0.6), 19)
+    assert not _odi_grid_matches(legacy, DEFAULT_ODI_RANGE, 5)
+
+    # A modern entry matches only its exact range and grid.
+    entry = {"odi_range": [0.01, 0.6], "num_odi_values": 19}
+    assert _odi_grid_matches(entry, (0.01, 0.6), 19)
+    assert not _odi_grid_matches(entry, (0.01, 0.6), 10)  # same range, diff grid
+    assert not _odi_grid_matches(entry, (0.01, 0.3), 19)  # diff range, same grid
+
+
+def _registry(dipy_home):
+    path = dipy_home / "force_simulations" / "cache_registry.json"
+    return json.load(open(path)) if path.exists() else []
+
+
+def test_force_cache_keys_on_odi_grid(tmp_path, monkeypatch):
+    """The simulation cache is keyed on odi_range and the resolved grid."""
+    monkeypatch.setenv("DIPY_HOME", str(tmp_path))
+    gtab = _make_gtab([1000])
+
+    def gen(**kwargs):
+        FORCEModel(gtab).generate(
+            num_simulations=60, num_cpus=1, verbose=False, **kwargs
+        )
+
+    def entries():
+        return [
+            (tuple(e["odi_range"]), e["num_odi_values"]) for e in _registry(tmp_path)
+        ]
+
+    # 1. default range -> one entry recorded at the autoscaled grid (10).
+    gen()
+    assert entries() == [((0.01, 0.3), DEFAULT_NUM_ODI_VALUES)]
+
+    # 2. a wider range is a distinct library (autoscaled grid 19), not a hit.
+    gen(odi_range=(0.01, 0.6))
+    assert len(entries()) == 2
+    assert ((0.01, 0.6), 19) in entries()
+
+    # 3. re-running the default params hits the cache (no new entry).
+    n_before = len(entries())
+    gen()
+    assert len(entries()) == n_before
+
+    # 4. an explicit grid at the default range is again distinct.
+    gen(num_odi_values=5)
+    assert ((0.01, 0.3), 5) in entries()
+    assert len(entries()) == 3
+
+
+def test_cache_registry_separates_min_crossing_angles(tmp_path, monkeypatch):
+    """Libraries built with different crossing-angle limits get separate cache slots."""
+    from dipy.core.gradients import gradient_table
+
+    monkeypatch.setenv("DIPY_HOME", str(tmp_path))
+
+    dirs = np.array(
+        [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]],
+        dtype=float,
+    )
+    bvals = np.array([0.0] + [1000.0] * 6 + [2000.0] * 6)
+    bvecs = np.vstack(([[0.0, 0.0, 0.0]], dirs, dirs))
+    gtab = gradient_table(bvals, bvecs=bvecs)
+
+    strict = FORCEModel(gtab)
+    strict.generate(num_simulations=60, num_cpus=1, verbose=False)
+
+    relaxed = FORCEModel(gtab)
+    relaxed.generate(
+        num_simulations=60, num_cpus=1, two_fiber_min_angle=0.0, verbose=False
+    )
+
+    cache_dir = tmp_path / "force_simulations"
+    assert len(list(cache_dir.glob("force_sim_*.npz"))) == 2
+
+    # The relaxed request must not be served the strict library, and a repeat
+    # of the relaxed request must reuse the one just written.
+    again = FORCEModel(gtab)
+    again.generate(
+        num_simulations=60, num_cpus=1, two_fiber_min_angle=0.0, verbose=False
+    )
+    assert len(list(cache_dir.glob("force_sim_*.npz"))) == 2
+    npt.assert_array_equal(again.simulations["signals"], relaxed.simulations["signals"])

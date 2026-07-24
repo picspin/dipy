@@ -3460,6 +3460,14 @@ class ReconstForceFlow(Workflow):
         posterior_beta=2000.0,
         compute_odf=False,
         num_simulations=500000,
+        wm_threshold=0.5,
+        tortuosity=False,
+        odi_range=None,
+        num_odi_values=None,
+        wm_d_par_range=None,
+        wm_d_perp_range=None,
+        gm_d_iso_range=None,
+        csf_d=None,
         num_cpus=-1,
         use_cache=True,
         compute_kurtosis=False,
@@ -3526,6 +3534,35 @@ class ReconstForceFlow(Workflow):
             Compute posterior ODF maps.
         num_simulations : int, optional
             Number of simulated voxels for the simulation library.
+        wm_threshold : float, optional
+            Minimum white-matter signal fraction for a simulated voxel to be
+            assigned fiber-orientation labels when building the library.
+        tortuosity : bool, optional
+            Constrain the white-matter perpendicular diffusivity through the
+            tortuosity model instead of sampling ``wm_d_perp_range``
+            independently.
+        odi_range : variable float, optional
+            Two values ``min max`` giving the orientation-dispersion-index
+            prior range sampled when building the simulation library. If not
+            set, the FORCE default ``0.01 0.3`` is used.
+        num_odi_values : int, optional
+            Number of points in the ODI sampling grid. If not set, the grid is
+            autoscaled from ``odi_range`` so its sampling density matches the
+            default grid (10 points across ``0.01 0.3``).
+        wm_d_par_range : variable float, optional
+            Two values ``min max`` (in mm^2/s) for the white-matter parallel
+            (axial) diffusivity prior. If not set, defaults to
+            ``0.002 0.003``.
+        wm_d_perp_range : variable float, optional
+            Two values ``min max`` (in mm^2/s) for the white-matter
+            perpendicular (radial) diffusivity prior. Ignored when
+            ``tortuosity`` is set. If not set, defaults to ``0.0003 0.0015``.
+        gm_d_iso_range : variable float, optional
+            Two values ``min max`` (in mm^2/s) for the gray-matter isotropic
+            diffusivity prior. If not set, defaults to ``0.0007 0.0012``.
+        csf_d : float, optional
+            Fixed CSF isotropic diffusivity in mm^2/s. If not set, defaults to
+            ``0.003``.
         num_cpus : int, optional
             Number of CPU cores for simulation generation. Use -1 to use
             all available cores.
@@ -3600,10 +3637,49 @@ class ReconstForceFlow(Workflow):
 
         """
         from dipy.reconst.force import MICRO_PARAMS, FORCEModel
+        from dipy.sims.force import get_default_diffusivity_config
         from dipy.utils.optpkg import optional_package
 
         use_posterior = not use_exact
         save_metrics = save_metrics or []
+
+        # Assemble the simulation-library prior overrides. Any range left
+        # unset falls back to the FORCE defaults (see
+        # ``get_default_diffusivity_config``), so the defaults are unchanged
+        # unless the user explicitly passes one of these options.
+        def _as_range(name, value):
+            values = tuple(float(v) for v in value)
+            if len(values) != 2:
+                raise ValueError(
+                    f"'{name}' expects exactly two values (min max); "
+                    f"got {len(values)}: {value}."
+                )
+            if values[0] > values[1]:
+                raise ValueError(
+                    f"'{name}' min ({values[0]}) must not exceed max ({values[1]})."
+                )
+            return values
+
+        diffusivity_overrides = {
+            "wm_d_par_range": wm_d_par_range,
+            "wm_d_perp_range": wm_d_perp_range,
+            "gm_d_iso_range": gm_d_iso_range,
+            "csf_d": csf_d,
+        }
+        if any(v is not None for v in diffusivity_overrides.values()):
+            diffusivity_config = get_default_diffusivity_config()
+            for key, value in diffusivity_overrides.items():
+                if value is None:
+                    continue
+                diffusivity_config[key] = (
+                    float(value) if key == "csf_d" else _as_range(key, value)
+                )
+        else:
+            diffusivity_config = None
+
+        gen_range_kwargs = {}
+        if odi_range is not None:
+            gen_range_kwargs["odi_range"] = _as_range("odi_range", odi_range)
 
         if engine == "ray":
             _, has_ray, _ = optional_package("ray")
@@ -3673,7 +3749,12 @@ class ReconstForceFlow(Workflow):
                 num_cpus=num_cpus,
                 use_cache=use_cache,
                 compute_dki=compute_kurtosis,
+                wm_threshold=wm_threshold,
+                tortuosity=tortuosity,
+                num_odi_values=num_odi_values,
+                diffusivity_config=diffusivity_config,
                 verbose=verbose,
+                **gen_range_kwargs,
             )
 
             logger.info("Fitting FORCE model...")
